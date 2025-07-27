@@ -2,6 +2,7 @@
 const express = require('express');
 const { MongoClient, ObjectId } = require('mongodb');
 const cors = require('cors');
+require('dotenv').config(); // Loads the .env file
 
 const app = express();
 const port = 3000;
@@ -10,7 +11,13 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static('public'));
 
-const uri = "mongodb+srv://nexus_user:***REDACTED***@cluster0.by3we68.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0";
+// The URI is now loaded securely from the .env file
+const uri = process.env.DATABASE_URI;
+if (!uri) {
+    console.error("FATAL ERROR: DATABASE_URI is not defined in .env file.");
+    process.exit(1); // Exit if the database connection string is missing
+}
+
 const client = new MongoClient(uri);
 
 async function connectToDatabase() { try { await client.connect(); console.log("Connected to MongoDB Atlas"); } catch (e) { console.error("Error connecting to MongoDB Atlas:", e); } }
