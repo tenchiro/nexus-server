@@ -82,21 +82,63 @@ app.post('/api/users', async (req, res) => {
     }
 });
 
+// **UPDATED**: This endpoint now handles both resuming and replaying.
 app.post('/api/resumeGame', async (req, res) => {
     const { passkey } = req.body;
     if (!passkey) return res.status(400).send({ message: 'Passkey is required' });
+
     try {
-        const session = await db().collection('gameplaySessions').findOne(
+        // First, try to find an in-progress session (standard resume)
+        let session = await db().collection('gameplaySessions').findOne(
             { passkey: passkey.toLowerCase(), status: 'in-progress' }
         );
-        if (!session) return res.status(404).send({ message: 'Invalid or expired Passkey. Please try again.' });
-        
-        const user = await db().collection('users').findOne({ _id: session.userId });
-        if (!user) {
-            console.error("Orphaned session found:", session);
-            return res.status(500).send({ message: 'Associated user not found for session.' });
+
+        if (session) {
+            // **LOGIC FOR STANDARD RESUME**
+            const user = await db().collection('users').findOne({ _id: session.userId });
+            if (!user) {
+                console.error("Orphaned session found:", session);
+                return res.status(500).send({ message: 'Associated user not found for session.' });
+            }
+            console.log("Resuming in-progress session for user:", user.name);
+            return res.json({ user: user, session: session });
         }
-        res.json({ user: user, session: session });
+
+        // **NEW LOGIC FOR REPLAY**: If no in-progress session, check for a completed one
+        const completedSession = await db().collection('gameplaySessions').findOne(
+            { passkey: passkey.toLowerCase(), status: 'completed' }
+        );
+
+        if (completedSession) {
+            // **LOGIC FOR STARTING A REPLAY**
+            const userToUpdate = await db().collection('users').findOneAndUpdate(
+                { _id: completedSession.userId },
+                { $inc: { totalReplays: 1 } },
+                { returnDocument: 'after' }
+            );
+            
+            if (!userToUpdate.value) return res.status(404).send({ message: 'Could not find original user to start replay.' });
+
+            const user = userToUpdate.value;
+            
+            // Create a brand new session for the replay
+            const newSessionResult = await db().collection('gameplaySessions').insertOne({
+                userId: user._id, sessionNumber: user.totalReplays, passkey: passkey.toLowerCase(),
+                currentWeek: 1, ethics: 0, awareness: 0, status: 'in-progress', startTime: new Date()
+            });
+
+            const newSession = {
+                _id: newSessionResult.insertedId, userId: user._id, sessionNumber: user.totalReplays,
+                currentWeek: 1, ethics: 0, awareness: 0, passkey: passkey.toLowerCase()
+            };
+            
+            console.log(`Starting a replay (session #${user.totalReplays}) for user:`, user.name);
+            return res.json({ user: user, session: newSession });
+        }
+
+        // If neither is found, the passkey is truly invalid
+        return res.status(404).send({ message: 'Invalid or expired Passkey. Please try again.' });
+
     } catch (error) {
         console.error("Error resuming game:", error);
         res.status(500).send({ message: 'Error resuming game' });
